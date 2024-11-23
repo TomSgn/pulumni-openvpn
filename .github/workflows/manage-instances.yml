@@ -1,0 +1,67 @@
+name: Manage VPN Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform: deploy, stop, or terminate'
+        required: true
+        default: 'deploy'
+        options:
+          - deploy
+          - stop
+          - terminate
+
+jobs:
+  manage-vpn:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Étape 1 : Vérifiez le code
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # Étape 2 : Installer Pulumi
+    - name: Install Pulumi
+      uses: pulumi/actions@v4
+      with:
+        command: preview
+
+    # Étape 3 : Configurer AWS CLI
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v3
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    # Étape 4 : Configurer Pulumi Stack
+    - name: Configure Pulumi Stack
+      run: |
+        pulumi stack select dev
+        pulumi config set aws:region ${{ secrets.AWS_REGION }} --plaintext
+        pulumi config set vpn:public_key ${{ secrets.SSH_PUBLIC_KEY }} --plaintext
+
+    # Étape 5 : Effectuer l'action choisie
+    - name: Perform Action
+      run: |
+        case "${{ github.event.inputs.action }}" in
+          deploy)
+            echo "Deploying infrastructure..."
+            pulumi up --yes
+            ;;
+          stop)
+            echo "Stopping EC2 instance..."
+            INSTANCE_ID=$(pulumi stack output instance_public_ip | xargs -n1 aws ec2 describe-instances --filters "Name=ip-address,Values={}" --query "Reservations[0].Instances[0].InstanceId" --output text)
+            aws ec2 stop-instances --instance-ids $INSTANCE_ID
+            ;;
+          terminate)
+            echo "Terminating EC2 instance..."
+            INSTANCE_ID=$(pulumi stack output instance_public_ip | xargs -n1 aws ec2 describe-instances --filters "Name=ip-address,Values={}" --query "Reservations[0].Instances[0].InstanceId" --output text)
+            aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+            ;;
+          *)
+            echo "Invalid action. Use deploy, stop, or terminate."
+            exit 1
+            ;;
+        esac
