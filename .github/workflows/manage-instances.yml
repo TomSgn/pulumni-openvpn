@@ -12,6 +12,10 @@ on:
           - start
           - stop
           - destroy
+      stack:
+        description: 'Pulumi stack to use (e.g., dev, staging, production)'
+        required: true
+        default: 'dev'
 
 jobs:
   manage-vpn:
@@ -22,13 +26,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    # Step 2: Install Pulumi
-    - name: Install Pulumi
-      uses: pulumi/actions@v4
-      with:
-        command: preview  # No action here; actions are handled manually below
-
-    # Step 3: Configure AWS CLI with credentials
+    # Step 2: Configure AWS credentials
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v3
       with:
@@ -36,39 +34,37 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: us-east-1
 
-    # Step 4: Configure Pulumi stack
-    - name: Configure Pulumi Stack
-      run: |
-        pulumi stack select dev
-        pulumi config set aws:region ${{ secrets.AWS_REGION }} --plaintext
-        pulumi config set vpn:public_key ${{ secrets.SSH_PUBLIC_KEY }} --plaintext
+    # Step 3: Run Pulumi Command Based on Action
+    - name: Perform Pulumi Action
+      uses: pulumi/actions@v4
+      with:
+        command: |
+          case "${{ github.event.inputs.action }}" in
+            deploy)
+              echo "Deploying infrastructure..."
+              pulumi up --yes
+              ;;
+            destroy)
+              echo "Destroying infrastructure..."
+              pulumi destroy --yes
+              ;;
+            *)
+              echo "Unsupported action for Pulumi."
+              exit 1
+              ;;
+          esac
+        stack-name: ${{ github.event.inputs.stack }}
+        pulumi-version: ^3
 
-    # Step 5: Perform the requested action
-    - name: Perform Action
+    # Step 4: Additional Actions for EC2 Management
+    - name: Manage EC2 Instance
+      if: ${{ github.event.inputs.action == 'start' || github.event.inputs.action == 'stop' }}
       run: |
-        case "${{ github.event.inputs.action }}" in
-          deploy)
-            echo "Deploying infrastructure..."
-            pulumi up --yes
-            ;;
-          start)
-            echo "Starting EC2 instance..."
-            # Get the instance ID using the public IP from Pulumi outputs
-            INSTANCE_ID=$(pulumi stack output instance_public_ip | xargs -n1 aws ec2 describe-instances --filters "Name=ip-address,Values={}" --query "Reservations[0].Instances[0].InstanceId" --output text)
-            aws ec2 start-instances --instance-ids $INSTANCE_ID
-            ;;
-          stop)
-            echo "Stopping EC2 instance..."
-            # Get the instance ID using the public IP from Pulumi outputs
-            INSTANCE_ID=$(pulumi stack output instance_public_ip | xargs -n1 aws ec2 describe-instances --filters "Name=ip-address,Values={}" --query "Reservations[0].Instances[0].InstanceId" --output text)
-            aws ec2 stop-instances --instance-ids $INSTANCE_ID
-            ;;
-          destroy)
-            echo "Destroying infrastructure..."
-            pulumi destroy --yes
-            ;;
-          *)
-            echo "Invalid action. Use deploy, start, stop, or destroy."
-            exit 1
-            ;;
-        esac
+        INSTANCE_ID=$(pulumi stack output instance_public_ip | xargs -n1 aws ec2 describe-instances --filters "Name=ip-address,Values={}" --query "Reservations[0].Instances[0].InstanceId" --output text)
+        if [ "${{ github.event.inputs.action }}" == "start" ]; then
+          echo "Starting EC2 instance..."
+          aws ec2 start-instances --instance-ids $INSTANCE_ID
+        elif [ "${{ github.event.inputs.action }}" == "stop" ]; then
+          echo "Stopping EC2 instance..."
+          aws ec2 stop-instances --instance-ids $INSTANCE_ID
+        fi
