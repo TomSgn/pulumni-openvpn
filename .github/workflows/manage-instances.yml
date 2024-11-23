@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Check out the code from the repository
+    # Step 1: Check out the code
     - name: Checkout code
       uses: actions/checkout@v3
 
@@ -34,37 +34,36 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: us-east-1
 
-    # Step 3: Run Pulumi Command Based on Action
-    - name: Perform Pulumi Action
+    # Step 3: Deploy infrastructure
+    - name: Deploy Infrastructure
+      if: ${{ github.event.inputs.action == 'deploy' }}
       uses: pulumi/actions@v4
       with:
-        command: |
-          case "${{ github.event.inputs.action }}" in
-            deploy)
-              echo "Deploying infrastructure..."
-              pulumi up --yes
-              ;;
-            destroy)
-              echo "Destroying infrastructure..."
-              pulumi destroy --yes
-              ;;
-            *)
-              echo "Unsupported action for Pulumi."
-              exit 1
-              ;;
-          esac
+        command: up
         stack-name: ${{ github.event.inputs.stack }}
         pulumi-version: ^3
 
-    # Step 4: Additional Actions for EC2 Management
-    - name: Manage EC2 Instance
-      if: ${{ github.event.inputs.action == 'start' || github.event.inputs.action == 'stop' }}
+    # Step 4: Destroy infrastructure
+    - name: Destroy Infrastructure
+      if: ${{ github.event.inputs.action == 'destroy' }}
+      uses: pulumi/actions@v4
+      with:
+        command: destroy
+        stack-name: ${{ github.event.inputs.stack }}
+        pulumi-version: ^3
+
+    # Step 5: Start EC2 instance
+    - name: Start EC2 Instance
+      if: ${{ github.event.inputs.action == 'start' }}
       run: |
         INSTANCE_ID=$(pulumi stack output instance_public_ip | xargs -n1 aws ec2 describe-instances --filters "Name=ip-address,Values={}" --query "Reservations[0].Instances[0].InstanceId" --output text)
-        if [ "${{ github.event.inputs.action }}" == "start" ]; then
-          echo "Starting EC2 instance..."
-          aws ec2 start-instances --instance-ids $INSTANCE_ID
-        elif [ "${{ github.event.inputs.action }}" == "stop" ]; then
-          echo "Stopping EC2 instance..."
-          aws ec2 stop-instances --instance-ids $INSTANCE_ID
-        fi
+        echo "Starting EC2 instance with ID: $INSTANCE_ID"
+        aws ec2 start-instances --instance-ids $INSTANCE_ID
+
+    # Step 6: Stop EC2 instance
+    - name: Stop EC2 Instance
+      if: ${{ github.event.inputs.action == 'stop' }}
+      run: |
+        INSTANCE_ID=$(pulumi stack output instance_public_ip | xargs -n1 aws ec2 describe-instances --filters "Name=ip-address,Values={}" --query "Reservations[0].Instances[0].InstanceId" --output text)
+        echo "Stopping EC2 instance with ID: $INSTANCE_ID"
+        aws ec2 stop-instances --instance-ids $INSTANCE_ID
